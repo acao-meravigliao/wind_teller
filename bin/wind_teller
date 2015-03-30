@@ -1,16 +1,12 @@
+#!/usr/bin/env ruby
 #
-# Copyright (C) 2014-2014, Daniele Orlandi
+# Copyright (C) 2014-2015, Daniele Orlandi
 #
 # Author:: Daniele Orlandi <daniele@orlandi.com>
 #
 # License:: You can redistribute it and/or modify it under the terms of the LICENSE file.
 #
 
-require 'ygg/agent/task'
+require 'wind_teller'
 
-module Glideradar
-
-class Task < Ygg::Agent::Task
-end
-
-end
+WindTeller::App.run_as_main!

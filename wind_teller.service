@@ -1,5 +1,5 @@
 [Unit]
-Description=Wind Receiver
+Description=Wind Teller
 Wants=
 After=network.target
 
@@ -9,7 +9,7 @@ Type=notify
 User=yggdra
 Group=yggdra
 
-ExecStart=/usr/local/bin/wind_receiver
+ExecStart=/usr/local/bin/wind_teller
 
 Restart=always
 
