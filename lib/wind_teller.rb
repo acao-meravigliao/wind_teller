@@ -58,6 +58,10 @@ class App < Ygg::Agent::Base
       'parity' => SerialPort::NONE)
 
     @actor_epoll.add(@serialport, SleepyPenguin::Epoll::IN)
+
+    @history_speed = []
+    @history_dir = []
+    @history_gst = []
   end
 
   def receive(events, io)
@@ -119,7 +123,31 @@ class App < Ygg::Agent::Base
     when 'S'; wind_speed = (wind_speed.to_f * 1609) / 3600
     end
 
-    log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}°" if mycfg.debug_data
+    # Record instantaneous values
+
+    @wind_speed = wind_speed
+    @wind_dir = wind_dir
+
+    # Push history data
+
+    @history_speed.push(wind_speed)
+    @history_dir.push(wind_dir)
+    @history_gst.push(@history_speed.last(6).reduce(:+) / 6.0)
+
+    if @history_speed.length > 240
+      @history_speed.slice!(0...@history_speed.length - 240)
+      @history_dir.slice!(0...@history_dir.length - 240)
+      @history_gst.slice!(0...@history_gst.length - 240)
+    end
+
+    # Calculate average and gust
+
+    @wind_2m_avg = @history_speed.reduce(:+) / @history_speed.size
+    @wind_2m_gst = @history_gst.max
+
+    ####
+
+    log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}° Avg2m=#{@wind_2m_avg} Gst2m=#{@wind_2m_gst}" if mycfg.debug_data
 
     @amqp.tell AM::AMQP::MsgPublish.new(
       destination: mycfg.exchange,
@@ -128,8 +156,10 @@ class App < Ygg::Agent::Base
         time: Time.now,
         data: {
           wind_ok: status == 'A',
-          wind_dir: wind_dir,
-          wind_speed: wind_speed,
+          wind_dir: @wind_dir,
+          wind_speed: @wind_speed,
+          wind_2m_avg: @wind_2m_avg,
+          wind_2m_gst: @wind_2m_gst,
         },
       },
       routing_key: 'WS',
