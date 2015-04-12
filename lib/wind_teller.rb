@@ -29,6 +29,16 @@ class App < Ygg::Agent::Base
     app_config_files << '/etc/yggdra/wind_teller.conf'
   end
 
+  def prepare_options(o)
+    o.on("--debug-data", "Logs decoded data") { |v| @config['wind_teller.debug_data'] = true }
+    o.on("--debug-nmea", "Logs NMEA messages") { |v| @config['wind_teller.debug_nmea'] = true }
+    o.on("--debug-serial", "Logs serial lines") { |v| @config['wind_teller.debug_serial'] = true }
+    o.on("--debug-serial-raw", "Logs serial bytes") { |v| @config['wind_teller.debug_serial_raw'] = true }
+
+    super
+  end
+
+
   def agent_boot
     @amqp.ask(AM::AMQP::MsgDeclareExchange.new(
       name: mycfg.exchange,
@@ -48,30 +58,14 @@ class App < Ygg::Agent::Base
       'parity' => SerialPort::NONE)
 
     @actor_epoll.add(@serialport, SleepyPenguin::Epoll::IN)
-
-    every(1.second) do
-      @amqp.tell AM::AMQP::MsgPublish.new(
-        destination: mycfg.exchange,
-        payload: {
-          station_id: 'WS',
-          time: Time.now,
-          dir: 330,
-          spd: 35.0,
-        },
-        options: {
-          type: 'WIND',
-          persistent: false,
-          mandatory: false,
-          expiration: 5000,
-        }
-      )
-    end
   end
 
   def receive(events, io)
     case io
     when @serialport
       data = @serialport.read_nonblock(65536)
+
+      log.debug "Serial Raw" if mycfg.debug_serial_raw
 
       if !data || data.empty?
         @actor_epoll.del(@socket)
@@ -88,7 +82,9 @@ class App < Ygg::Agent::Base
   def receive_line(line)
     line.chomp!
 
-    if line =~ /\$([A-Z]+),(.*)\*([0-9A-F][0-9A-F])$/
+    log.debug "Serial Line" if mycfg.debug_serial
+
+    if line =~ /^\$([A-Z]+),(.*)\*([0-9A-F][0-9A-F])$/
       sum = line[1..-4].chars.inject(0) { |a,x| a ^ x.ord }
       chk = $3.to_i(16)
 
@@ -97,13 +93,17 @@ class App < Ygg::Agent::Base
       else
         log.error "NMEA CHK INCORRECT"
       end
+    elsif line =~ /^\$([A-Z]+),(.*)$/
+      handle_nmea($1, $2) # Workaround for messages withoud checksum
     end
   end
 
   def handle_nmea(msg, values)
+    log.debug "NMEA #{msg} #{values}" if mycfg.debug_nmea
+
     case msg
-    when '$IIMWV' ; handle_iimwv(values)
-    when '$WIXDR' ; handle_wixdr(values)
+    when 'IIMWV' ; handle_iimwv(values)
+    when 'WIMDA' ; handle_wimda(values)
     end
   end
 
@@ -113,64 +113,66 @@ class App < Ygg::Agent::Base
     wind_dir = wind_dir.to_f
 
     case wind_speed_unit
-    when 'N': wind_speed = (wind_speed.to_f * 1854) / 3600
-    when 'K': wind_speed = (wind_speed.to_f * 1000) / 3600
-    when 'M': wind_speed = wind_speed.to_f
-    when 'S': wind_speed = (wind_speed.to_f * 1609) / 3600
+    when 'N'; wind_speed = (wind_speed.to_f * 1854) / 3600
+    when 'K'; wind_speed = (wind_speed.to_f * 1000) / 3600
+    when 'M'; wind_speed = wind_speed.to_f
+    when 'S'; wind_speed = (wind_speed.to_f * 1609) / 3600
     end
+
+    log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}°" if mycfg.debug_data
 
     @amqp.tell AM::AMQP::MsgPublish.new(
       destination: mycfg.exchange,
       payload: {
-        msg_type: :station_update,
-        msg: {
-          station_id: 'WS',
-          time: @time,
-          data: {
-            wind_ok: status == 'A',
-            wind_dir: wind_dir,
-            wind_speed: wind_speed,
-          }
+        station_id: 'WS',
+        time: Time.now,
+        data: {
+          wind_ok: status == 'A',
+          wind_dir: wind_dir,
+          wind_speed: wind_speed,
         },
       },
+      routing_key: 'WS',
       options: {
         type: 'WX_UPDATE',
         persistent: false,
         mandatory: false,
-        expiration: 60000,
-      }
+      },
     )
   end
 
-  def handle_wixdr(line)
+  def handle_wimda(line)
     data = nmea_parse(line, no_checksum: true)
 
-    (data.length / 2).each do |i|
+    pressure = nil
+    temperature = nil
+
+    (data.length / 2).times do |i|
       case data[i * 2 + 1]
       when 'B'
-        pressure = data[i * 2]
+        pressure = data[i * 2].to_f
       when 'C'
-        temperature = data[i * 2]
+        temperature = data[i * 2].to_f
+      end
     end
+
+    log.debug "Pressure #{pressure * 1000} mb, Temperature #{temperature}" if mycfg.debug_data
 
     @amqp.tell AM::AMQP::MsgPublish.new(
       destination: mycfg.exchange,
       payload: {
-        msg_type: :station_update,
-        msg: {
-          station_id: 'WS',
-          time: @time,
-          data: {
-            pressure: pressure.to_f,
-            temperature: temperature.to_f,
-          }
-        },
+        station_id: 'WS',
+        time: @time,
+        data: {
+          pressure: pressure,
+          temperature: temperature,
+        }
       },
+      routing_key: 'WS',
       options: {
         type: 'WX_UPDATE',
         persistent: false,
         mandatory: false,
-        expiration: 60000,
       }
     )
 
