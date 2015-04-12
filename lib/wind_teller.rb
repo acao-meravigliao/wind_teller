@@ -59,6 +59,8 @@ class App < Ygg::Agent::Base
 
     @actor_epoll.add(@serialport, SleepyPenguin::Epoll::IN)
 
+    @history_size = 1200 # 600 samples * 2 samples/second = 1200 seconds
+
     @history_speed = []
     @history_dir = []
     @history_gst = []
@@ -134,20 +136,27 @@ class App < Ygg::Agent::Base
     @history_dir.push(wind_dir)
     @history_gst.push(@history_speed.last(6).reduce(:+) / 6.0)
 
-    if @history_speed.length > 240
-      @history_speed.slice!(0...@history_speed.length - 240)
-      @history_dir.slice!(0...@history_dir.length - 240)
-      @history_gst.slice!(0...@history_gst.length - 240)
+    if @history_speed.length > @history_size
+      @history_speed.slice!(0...@history_speed.length - @history_size)
+      @history_dir.slice!(0...@history_dir.length - @history_size)
+      @history_gst.slice!(0...@history_gst.length - @history_size)
     end
 
     # Calculate average and gust
 
-    @wind_2m_avg = @history_speed.reduce(:+) / @history_speed.size
-    @wind_2m_gst = @history_gst.max
+    @wind_2m_avg = @history_speed.last(240).reduce(:+) / @history_speed.size
+    @wind_2m_gst = @history_gst.last(240).max
+
+    @wind_10m_avg = @history_speed.reduce(:+) / @history_speed.size
+    @wind_10m_gst = @history_gst.max
 
     ####
 
-    log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}° Avg2m=#{@wind_2m_avg} Gst2m=#{@wind_2m_gst}" if mycfg.debug_data
+    if mycfg.debug_data
+      log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}° " +
+                " avg_2m=#{'%.1f' % @wind_2m_avg} gst_2m=#{'%.1f' % @wind_2m_gst}" +
+                " avg_10m=#{'%.1f' % @wind_10m_avg} gst_10m=#{'%.1f' % @wind_10m_gst}"
+    end
 
     @amqp.tell AM::AMQP::MsgPublish.new(
       destination: mycfg.exchange,
@@ -160,6 +169,8 @@ class App < Ygg::Agent::Base
           wind_speed: @wind_speed,
           wind_2m_avg: @wind_2m_avg,
           wind_2m_gst: @wind_2m_gst,
+          wind_10m_avg: @wind_10m_avg,
+          wind_10m_gst: @wind_10m_gst,
         },
       },
       routing_key: 'WS',
@@ -174,19 +185,23 @@ class App < Ygg::Agent::Base
   def handle_wimda(line)
     data = nmea_parse(line, no_checksum: true)
 
-    pressure = nil
-    temperature = nil
-
     (data.length / 2).times do |i|
       case data[i * 2 + 1]
       when 'B'
-        pressure = data[i * 2].to_f
+        @qfe = data[i * 2].to_f * 100000
       when 'C'
-        temperature = data[i * 2].to_f
+        @temperature = data[i * 2].to_f
       end
     end
 
-    log.debug "Pressure #{pressure * 1000} mb, Temperature #{temperature}" if mycfg.debug_data
+    hisa = 44330.77 - (11880.32 * ((@qfe / 100) ** 0.190263))
+    @qnh = 101325 * (( 1 - (0.0065 * ((hisa - mycfg.qfe_height)/288.15))) ** 5.25588)
+
+    if mycfg.debug_data
+      log.debug "QFE=#{'%0.1f' % (@qfe / 100)} hPa " +
+                "QNH=#{'%0.1f' % (@qnh / 100)} hPa, " +
+                "Temperature #{'%0.1f' % @temperature}"
+    end
 
     @amqp.tell AM::AMQP::MsgPublish.new(
       destination: mycfg.exchange,
@@ -194,8 +209,9 @@ class App < Ygg::Agent::Base
         station_id: 'WS',
         time: @time,
         data: {
-          pressure: pressure,
-          temperature: temperature,
+          qfe: @qfe,
+          qnh: @qnh,
+          temperature: @temperature,
         }
       },
       routing_key: 'WS',
