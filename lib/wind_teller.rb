@@ -151,12 +151,12 @@ class App < Ygg::Agent::Base
 
     # Calculate average and gust
 
-    @wind_2m_avg = @history_speed.last(240).reduce(:+) / @history_speed.size
-    @wind_2m_vec = @history_vec.last(240).reduce(:+) / @history_speed.size
+    @wind_2m_avg = @history_speed.last(240).reduce(:+) / hist_size
+    @wind_2m_vec = @history_vec.last(240).reduce(:+) / hist_size
     @wind_2m_gst = @history_gst.last(240).max
 
-    @wind_10m_avg = @history_speed.reduce(:+) / @history_speed.size
-    @wind_10m_vec = @history_vec.reduce(:+) / @history_speed.size
+    @wind_10m_avg = @history_speed.reduce(:+) / hist_size
+    @wind_10m_vec = @history_vec.reduce(:+) / hist_size
     @wind_10m_gst = @history_gst.max
 
     ####
@@ -173,7 +173,6 @@ class App < Ygg::Agent::Base
       destination: mycfg.exchange,
       payload: {
         station_id: 'WS',
-        time: Time.now,
         data: {
           wind_ok: status == 'A',
           wind_dir: @wind_dir,
@@ -203,7 +202,7 @@ class App < Ygg::Agent::Base
     (data.length / 2).times do |i|
       case data[i * 2 + 1]
       when 'B'
-        @qfe = data[i * 2].to_f * 100000
+        @qfe = (data[i * 2].to_f * 100000 + mycfg.qfe_cal_offset) * mycfg.qfe_cal_scale
       when 'C'
         @temperature = data[i * 2].to_f
       end
@@ -225,6 +224,8 @@ class App < Ygg::Agent::Base
         time: @time,
         data: {
           qfe: @qfe,
+          qfe_h: mycfg.qfe_height,
+          isa_h: hisa,
           qnh: @qnh,
           temperature: @temperature,
         }
