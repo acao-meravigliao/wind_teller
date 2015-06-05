@@ -24,6 +24,18 @@ class App < Ygg::Agent::Base
   self.app_version = VERSION
   self.task_class = Task
 
+  class WindSample
+    attr_accessor :ts
+    attr_accessor :speed
+    attr_accessor :dir
+    attr_accessor :vec
+    attr_accessor :gst
+
+    def initialize(**pars)
+      pars.each { |k,v| send("#{k}=", v) }
+    end
+  end
+
   def prepare_default_config
     app_config_files << File.join(File.dirname(__FILE__), '..', 'config', 'wind_teller.conf')
     app_config_files << '/etc/yggdra/wind_teller.conf'
@@ -59,12 +71,10 @@ class App < Ygg::Agent::Base
 
     @actor_epoll.add(@serialport, SleepyPenguin::Epoll::IN)
 
-    @history_size = 1200 # 600 samples * 2 samples/second = 1200 seconds
+    @wind_sps = 2
 
-    @history_speed = []
-    @history_dir = []
-    @history_vec = []
-    @history_gst = []
+    @history_size = 600 * @wind_sps # 600 seconds
+    @history = []
   end
 
   def receive(events, io)
@@ -120,10 +130,10 @@ class App < Ygg::Agent::Base
     wind_dir = wind_dir.to_f
 
     case wind_speed_unit
-    when 'N'; wind_speed = (wind_speed.to_f * 1854) / 3600
-    when 'K'; wind_speed = (wind_speed.to_f * 1000) / 3600
+    when 'N'; wind_speed = (wind_speed.to_f * 1854) / 3600.0
+    when 'K'; wind_speed = (wind_speed.to_f * 1000) / 3600.0
     when 'M'; wind_speed = wind_speed.to_f
-    when 'S'; wind_speed = (wind_speed.to_f * 1609) / 3600
+    when 'S'; wind_speed = (wind_speed.to_f * 1609) / 3600.0
     end
 
     # Record instantaneous values
@@ -135,38 +145,50 @@ class App < Ygg::Agent::Base
 
     wind_dir_rad = (wind_dir / 180) * Math::PI
 
-    @history_speed.push(wind_speed)
-    @history_dir.push(wind_dir)
-    @history_vec.push(Complex.polar(wind_speed, wind_dir_rad))
-    @history_gst.push(@history_speed.last(6).reduce(:+) / 6.0)
+    gst = @history.size >= (3 * @wind_sps) ?
+            @history.last(3 * @wind_sps).map(&:speed).reduce(:+) / (3.0 * @wind_sps) :
+            wind_speed
 
-    hist_size = @history_speed.length
+    @history.push(WindSample.new(
+      ts: Time.now,
+      speed: wind_speed,
+      dir: wind_dir,
+      vec: Complex.polar(wind_speed, wind_dir_rad),
+      gst: gst,
+    ))
 
-    if hist_size > @history_size
-      @history_speed.slice!(-@history_size..-1)
-      @history_dir.slice!(-@history_size..-1)
-      @history_vec.slice!(-@history_size..-1)
-      @history_gst.slice!(-@history_size..-1)
+    if @history.size > @history_size
+      @history.slice!(-@history_size..-1)
     end
 
     # Calculate average and gust
 
-    @wind_2m_avg = @history_speed.last(240).reduce(:+) / hist_size
-    @wind_2m_vec = @history_vec.last(240).reduce(:+) / hist_size
-    @wind_2m_gst = @history_gst.last(240).max
+    hist_size = @history.size
 
-    @wind_10m_avg = @history_speed.reduce(:+) / hist_size
-    @wind_10m_vec = @history_vec.reduce(:+) / hist_size
-    @wind_10m_gst = @history_gst.max
+    last_2m = @history.last(120 * @wind_sps)
+    @wind_2m_avg = last_2m.map(&:speed).reduce(:+) / hist_size
+    @wind_2m_vec = last_2m.map(&:vec).reduce(:+) / hist_size
+    ( @wind_2m_gst, gst_idx ) = last_2m.map(&:gst).each_with_index.max
+    @wind_2m_gst_dir = last_2m[gst_idx].dir
+    @wind_2m_gst_ts = last_2m[gst_idx].ts
+
+    last_10m = @history
+    @wind_10m_avg = last_10m.map(&:speed).reduce(:+) / hist_size
+    @wind_10m_vec = last_10m.map(&:vec).reduce(:+) / hist_size
+    ( @wind_10m_gst, gst_idx ) = last_10m.map(&:gst).each_with_index.max
+    @wind_10m_gst_dir = last_10m[gst_idx].dir
+    @wind_10m_gst_ts = last_10m[gst_idx].ts
 
     ####
 
     if mycfg.debug_data
       log.debug "Wind #{'%.1f' % wind_speed} m/s from #{wind_dir.to_i}° " +
-                " avg_2m=#{'%.1f' % @wind_2m_avg} gst_2m=#{'%.1f' % @wind_2m_gst}" +
+                " avg_2m=#{'%.1f' % @wind_2m_avg}" +
                 " vec_2m=#{'%.1f' % @wind_2m_vec.magnitude}@#{'%.0f' % (((@wind_2m_vec.phase / Math::PI) * 180) % 360)}" +
-                " avg_10m=#{'%.1f' % @wind_10m_avg} gst_10m=#{'%.1f' % @wind_10m_gst}" +
-                " vec_10m=#{'%.1f' % @wind_10m_vec.magnitude}@#{'%.0f' % (((@wind_10m_vec.phase / Math::PI) * 180) % 360)}"
+                " gst_2m=#{'%.1f' % @wind_2m_gst} from #{'%.1f' % @wind_2m_gst_dir} at #{@wind_2m_gst_ts}" +
+                " avg_10m=#{'%.1f' % @wind_10m_avg}" +
+                " vec_10m=#{'%.1f' % @wind_10m_vec.magnitude}@#{'%.0f' % (((@wind_10m_vec.phase / Math::PI) * 180) % 360)}" +
+                " gst_10m=#{'%.1f' % @wind_10m_gst} from #{'%.1f' % @wind_10m_gst_dir} at #{@wind_10m_gst_ts}"
     end
 
     @amqp.tell AM::AMQP::MsgPublish.new(
@@ -181,10 +203,14 @@ class App < Ygg::Agent::Base
           wind_2m_vec_mag: @wind_2m_vec.magnitude,
           wind_2m_vec_dir: ((@wind_2m_vec.phase / Math::PI) * 180) % 360,
           wind_2m_gst: @wind_2m_gst,
+          wind_2m_gst_dir: @wind_2m_gst_dir,
+          wind_2m_gst_ts: @wind_2m_gst_ts,
           wind_10m_avg: @wind_10m_avg,
           wind_10m_gst: @wind_10m_gst,
           wind_10m_vec_mag: @wind_10m_vec.magnitude,
           wind_10m_vec_dir: ((@wind_10m_vec.phase / Math::PI) * 180) % 360,
+          wind_10m_gst_dir: @wind_10m_gst_dir,
+          wind_10m_gst_ts: @wind_10m_gst_ts,
         },
       },
       routing_key: 'WS',
