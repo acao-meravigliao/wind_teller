@@ -1,5 +1,5 @@
-source "http://rubygems.org"
-source 'http://gems.sevio.it/'
+source "https://rubygems.org"
+source 'https://gems.sevio.it/'
 
 # Specify your gem's dependencies in a.gemspec
 gemspec
