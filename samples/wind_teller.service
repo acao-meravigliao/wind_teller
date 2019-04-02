@@ -12,9 +12,10 @@ Group=yggdra
 ExecStart=/usr/local/bin/wind_teller
 
 Restart=always
-
-TimeoutStartSec=15
-WatchdogSec=10
+RestartSec=20
+TimeoutStartSec=20
+StartLimitInterval=0
+WatchdogSec=30
 
 [Install]
 WantedBy=multi-user.target
