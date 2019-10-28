@@ -29,7 +29,6 @@ Gem::Specification.new do |s|
   s.add_development_dependency 'rake'
   s.add_development_dependency 'rspec'
   s.add_development_dependency 'rspec_junit_formatter'
-  s.add_development_dependency 'geminabox'
 
   s.add_runtime_dependency 'ygg_agent', '~> 2.8'
   s.add_runtime_dependency 'serialport', '~> 1.3'
