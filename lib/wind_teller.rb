@@ -7,6 +7,8 @@
 # License:: You can redistribute it and/or modify it under the terms of the LICENSE file.
 #
 
+require 'active_support/core_ext'
+
 require 'ygg/agent/base'
 
 require 'ygg/app/line_buffer'
