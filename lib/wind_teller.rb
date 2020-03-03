@@ -71,7 +71,7 @@ class App < Ygg::Agent::Base
       'stop_bits' => 1,
       'parity' => SerialPort::NONE)
 
-    actor_epoll.add(@serialport, AM::Epoll::IN)
+    actor_io_add(@serialport, AM::Epoll::IN)
 
     @wind_sps = 2
 
@@ -87,7 +87,7 @@ class App < Ygg::Agent::Base
       log.debug "Serial Raw" if mycfg.debug_serial_raw
 
       if !data || data.empty?
-        actor_epoll.del(@socket)
+        actor_io_del(@socket)
         actor_exit
         return
       end
