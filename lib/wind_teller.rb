@@ -54,7 +54,7 @@ class App < Ygg::Agent::Base
 
 
   def agent_boot
-    @amqp.ask(AM::AMQP::MsgDeclareExchange.new(
+    @amqp.ask(AM::AMQP::Client::MsgDeclareExchange.new(
       name: mycfg.exchange,
       type: :topic,
       options: {
@@ -193,7 +193,7 @@ class App < Ygg::Agent::Base
                 " gst_10m=#{'%.1f' % @wind_10m_gst} from #{'%.1f' % @wind_10m_gst_dir} at #{@wind_10m_gst_ts}"
     end
 
-    @amqp.tell AM::AMQP::MsgPublish.new(
+    @amqp.tell AM::AMQP::Client::MsgPublish.new(
       destination: mycfg.exchange,
       payload: {
         station_id: 'WS',
@@ -245,7 +245,7 @@ class App < Ygg::Agent::Base
                 "Temperature #{'%0.1f' % @temperature}"
     end
 
-    @amqp.tell AM::AMQP::MsgPublish.new(
+    @amqp.tell AM::AMQP::Client::MsgPublish.new(
       destination: mycfg.exchange,
       payload: {
         station_id: 'WS',
